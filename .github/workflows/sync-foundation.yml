@@ -1,0 +1,47 @@
+name: Sync official Cargo upstream
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-official-foundation
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == '42nevin/cargo'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Mirror rust-lang/cargo master to foundation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          gh auth setup-git
+          mirror="$RUNNER_TEMP/cargo-upstream.git"
+          git init --bare "$mirror"
+          git -C "$mirror" fetch --no-tags \
+            https://github.com/rust-lang/cargo.git \
+            refs/heads/master:refs/heads/foundation
+
+          # Keep foundation as an exact mirror; reject divergent destination history.
+          git -C "$mirror" push \
+            https://github.com/42nevin/cargo.git \
+            refs/heads/foundation:refs/heads/foundation
+
+          synced_sha="$(git -C "$mirror" rev-parse refs/heads/foundation)"
+          {
+            echo "Synced rust-lang/cargo:master to 42nevin/cargo:foundation."
+            echo
+            echo "Commit: $synced_sha"
+          } >> "$GITHUB_STEP_SUMMARY"
