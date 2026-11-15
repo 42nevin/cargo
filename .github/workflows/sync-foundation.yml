@@ -5,8 +5,7 @@ on:
     - cron: "23 */6 * * *"
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: sync-official-foundation
@@ -17,17 +16,28 @@ jobs:
     if: github.repository == '42nevin/cargo'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: write
     steps:
       - name: Mirror rust-lang/cargo master to foundation
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          FOUNDATION_SYNC_SSH_KEY: ${{ secrets.CARGO_FOUNDATION_SYNC_SSH_KEY }}
         run: |
           set -euo pipefail
+          umask 077
 
-          gh auth setup-git
+          # A repository-only deploy key can sync upstream workflow changes,
+          # which GitHub rejects when pushed using the default GITHUB_TOKEN.
+          ssh_dir="$RUNNER_TEMP/cargo-foundation-ssh"
+          mkdir -m 700 "$ssh_dir"
+          ssh_key="$ssh_dir/id_ed25519"
+          trap 'rm -f "$ssh_key"' EXIT
+          printf '%s\n' "$FOUNDATION_SYNC_SSH_KEY" > "$ssh_key"
+          # GitHub's Ed25519 host key from https://api.github.com/meta.
+          printf '%s\n' \
+            'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
+            > "$ssh_dir/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i \"$ssh_key\" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=\"$ssh_dir/known_hosts\""
+
           mirror="$RUNNER_TEMP/cargo-upstream.git"
           git init --bare "$mirror"
           git -C "$mirror" fetch --no-tags \
@@ -36,7 +46,7 @@ jobs:
 
           # Keep foundation as an exact mirror; reject divergent destination history.
           git -C "$mirror" push \
-            https://github.com/42nevin/cargo.git \
+            git@github.com:42nevin/cargo.git \
             refs/heads/foundation:refs/heads/foundation
 
           synced_sha="$(git -C "$mirror" rev-parse refs/heads/foundation)"
